@@ -327,8 +327,11 @@ async function proxyToOpenAI(req, res, upstreamPath) {
   Readable.fromWeb(upstream.body).pipe(res);
 }
 
+const { proxyViaCodexCli } = require("./codex_bridge");
+
 app.post("/api/llm/openai/v1/chat/completions", async (req, res) => {
   if (process.env.NODE_ENV === "test") return handleTestOpenAiChatCompletions(req, res);
+  if (process.env.OPENCLAW_LITE_CODEX_CLI === "1") return proxyViaCodexCli(req, res);
   return await proxyToOpenAI(req, res, "chat/completions");
 });
 
