@@ -93,6 +93,11 @@ async function init() {
   const chatTranscript = byId("chatTranscript");
   const chatInput = byId("chatInput");
   const llmKeyInput = byId("llmKeyInput");
+  const llmModelRefInput = byId("llmModelRefInput");
+  const llmApiInput = byId("llmApiInput");
+  const llmBaseUrlInput = byId("llmBaseUrlInput");
+  const llmThinkingInput = byId("llmThinkingInput");
+  const llmUseProxyInput = byId("llmUseProxyInput");
   const llmLine = byId("llmLine");
 
   const connectWalletBtn = byId("connectWalletBtn");
@@ -202,6 +207,11 @@ async function init() {
       llmKeyInput.placeholder = on ? "Codex CLI bridge enabled (no API key required)" : "LLM API key (stored locally)";
       if (on) llmKeyInput.value = "";
     }
+    if (llmModelRefInput) llmModelRefInput.disabled = on;
+    if (llmApiInput) llmApiInput.disabled = on;
+    if (llmBaseUrlInput) llmBaseUrlInput.disabled = on;
+    if (llmThinkingInput) llmThinkingInput.disabled = on;
+    if (llmUseProxyInput) llmUseProxyInput.disabled = on;
     if (llmSaveBtn) llmSaveBtn.disabled = on;
     if (llmLine) llmLine.textContent = on ? "LLM: Codex CLI bridge (local)" : llmLine.textContent;
   }
@@ -219,23 +229,61 @@ async function init() {
 
   loadCapabilities();
 
+  function parseModelRef(modelRef, fallbackProvider = "openai", fallbackModelId = "gpt-4o-mini") {
+    const ref = String(modelRef || "").trim();
+    if (!ref) return { provider: fallbackProvider, modelId: fallbackModelId, modelRef: `${fallbackProvider}/${fallbackModelId}` };
+    const slash = ref.indexOf("/");
+    if (slash > 0) {
+      const provider = ref.slice(0, slash).trim();
+      const modelId = ref.slice(slash + 1).trim();
+      if (provider && modelId) return { provider, modelId, modelRef: `${provider}/${modelId}` };
+    }
+    return { provider: fallbackProvider, modelId: ref, modelRef: `${fallbackProvider}/${ref}` };
+  }
+
+  function normalizeThinkingLevel(value) {
+    const v = String(value || "").trim().toLowerCase();
+    if (!v) return "";
+    if (v === "minimal" || v === "low" || v === "medium" || v === "high" || v === "xhigh") return v;
+    return "";
+  }
+
   function configureLlm({ apiKey }) {
     const key = String(apiKey || "").trim();
-    const baseUrl = new URL("/api/llm/openai/v1", window.location.origin).toString();
+    const modelParsed = parseModelRef(llmModelRefInput?.value || "");
+    let api = String(llmApiInput?.value || "").trim();
+    const baseOverride = String(llmBaseUrlInput?.value || "").trim();
+    const thinking = normalizeThinkingLevel(llmThinkingInput?.value || "");
+    const useProxy = llmUseProxyInput ? llmUseProxyInput.checked !== false : true;
+    const defaultOpenAiProxyBase = new URL("/api/llm/openai/v1", window.location.origin).toString();
+    if (!api && modelParsed.provider === "openai") api = "openai-completions";
+    const baseUrl = baseOverride || (modelParsed.provider === "openai" ? defaultOpenAiProxyBase : "");
+
     sendToWorker({
       type: "gateway.command.setLlmConfig",
       apiKey: key,
-      api: "openai-completions",
-      provider: "openai",
-      modelId: "gpt-4o-mini",
+      api,
+      provider: modelParsed.provider,
+      modelRef: modelParsed.modelRef,
+      modelId: modelParsed.modelId,
       baseUrl,
+      reasoning: thinking,
+      useProxy,
     });
-    if (llmLine) llmLine.textContent = key ? "LLM: key saved (local)" : "LLM: missing key";
+    if (llmLine) {
+      const keyStatus = key ? "key saved" : "missing key";
+      llmLine.textContent = `LLM: ${modelParsed.modelRef} (${keyStatus}, proxy=${
+        useProxy ? "on" : "off"
+      }, thinking=${thinking || "default"})`;
+    }
   }
 
   llmSaveBtn?.addEventListener("click", () => {
     configureLlm({ apiKey: llmKeyInput?.value || "" });
   });
+
+  if (llmModelRefInput && !llmModelRefInput.value) llmModelRefInput.value = "openai/gpt-4o-mini";
+  if (llmUseProxyInput) llmUseProxyInput.checked = true;
 
   createHouseBtn?.addEventListener("click", () => {
     const rh = new Uint8Array(32);

@@ -50,11 +50,17 @@ In this repo, the port module lives at:
 
 ### 3.2 Provider subset (MUST)
 
-The port module MUST register only browser-safe providers required for Lite Phase 1:
+The port module MUST register browser-safe PI provider APIs used by Lite:
 - `openai-completions`
-- `openai-responses` (optional for v1.2 milestones; recommended for forward-compat)
+- `openai-responses`
+- `openai-codex-responses`
+- `anthropic-messages`
+- `google-generative-ai`
+- `google-gemini-cli`
+- `google-vertex`
+- `azure-openai-responses`
 
-The module MUST NOT register Node-only providers (Bedrock, Vertex ADC, etc) via the built-in registry.
+The module MUST NOT register APIs that pull Node-only runtime deps in browser bundles (for example Bedrock via `proxy-agent` / Node HTTP handlers).
 
 ### 3.3 Node builtins in browser bundles (MUST)
 
@@ -112,4 +118,3 @@ When updating PI-AI / PI versions:
 4) Ensure M8 and no-mocks tests still pass:
    - `e2e/openclaw_lite/09_pi_ai_llm_integration.spec.js`
    - `e2e/15_openclaw_lite_no_mocks.spec.js`
-
