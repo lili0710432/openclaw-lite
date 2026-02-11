@@ -189,6 +189,22 @@ Security:
 Notes:
 - Codex CLI bridge mode does not currently implement `/responses`.
 
+### ALL `/api/llm/proxy/:encodedBase/*`
+
+Purpose:
+- Same-origin generic passthrough for PI providers whose vendor endpoints are not browser-CORS accessible.
+- `:encodedBase` is URL-encoded upstream base URL (for example `https%3A%2F%2Fapi.anthropic.com%2Fv1`).
+- Any path suffix after `:encodedBase` is appended to the upstream base path.
+
+Behavior:
+- Forwards request method, body, and request headers (excluding hop-by-hop headers, `host`, `content-length`, and `cookie`).
+- Streams upstream response bytes and status back to browser.
+- Does not persist API keys or provider tokens.
+
+Errors:
+- `400 INVALID_UPSTREAM_BASE` for invalid/missing upstream base URL.
+- `502 UPSTREAM_UNAVAILABLE` when upstream cannot be reached.
+
 ---
 
 ## Wallet Lookup (House Recovery)

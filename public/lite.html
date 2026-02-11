@@ -45,6 +45,17 @@
           <input data-testid="llm-key-input" id="llmKeyInput" class="input" type="password" placeholder="LLM API key (stored locally)" style="min-width: 260px; flex: 1;" />
           <button data-testid="llm-key-save" class="btn" id="llmSaveBtn">Save LLM key</button>
         </div>
+        <div class="kv" style="margin-top: 8px; flex-wrap: wrap;">
+          <input id="llmModelRefInput" class="input" placeholder="provider/model (e.g. openai-codex/gpt-5.3-codex)" style="min-width: 320px; flex: 1;" />
+          <input id="llmApiInput" class="input" placeholder="api override (optional)" style="min-width: 220px; flex: 1;" />
+        </div>
+        <div class="kv" style="margin-top: 8px; flex-wrap: wrap;">
+          <input id="llmBaseUrlInput" class="input" placeholder="provider base URL override (optional)" style="min-width: 320px; flex: 1;" />
+          <label class="small" style="display:flex; align-items:center; gap:6px;">
+            <input id="llmUseProxyInput" type="checkbox" checked />
+            Use same-origin LLM proxy
+          </label>
+        </div>
         <div class="small" data-testid="llm-status" id="llmLine" style="margin-top: 8px; color: var(--muted)"></div>
       </div>
 

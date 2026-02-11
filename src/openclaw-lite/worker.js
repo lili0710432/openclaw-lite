@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 
 import { agentLoop } from "@mariozechner/pi-agent-core/dist/agent-loop.js";
+import { getModel as getPiModel } from "@mariozechner/pi-ai/dist/models.js";
 import { zipSync } from "fflate";
 
 import {
@@ -1161,27 +1162,96 @@ async function runHttpRequest(params, toolName = "http_request") {
 // --- PI-AI model configuration (NO MOCKS) ---
 //
 // Lite runs PI's agent loop in-browser and uses PI-AI providers for real LLM calls.
-// In this repo, calls go to a same-origin OpenAI-compatible proxy:
-// - /api/llm/openai/v1/chat/completions
-//
-// Tests use the same endpoint but the server responds deterministically.
+// We keep same-origin by default and route third-party providers through a same-origin
+// proxy path to avoid browser CORS failures.
 function defaultLlmBaseUrl() {
-  // Must be same-origin to satisfy the runtime allowlist.
   const u = new URL("/api/llm/openai/v1", safeOrigin() || "http://localhost");
   return u.toString();
 }
 
+function llmProxyBaseUrl(upstreamBaseUrl) {
+  const raw = String(upstreamBaseUrl || "").trim();
+  const normalized = raw.replace(/\/+$/, "");
+  const encoded = encodeURIComponent(normalized);
+  const u = new URL(`/api/llm/proxy/${encoded}`, safeOrigin() || "http://localhost");
+  return u.toString();
+}
+
+function parseConfiguredModelRef() {
+  const providerHint = String(state.llmProvider || "openai").trim() || "openai";
+  const modelHint = String(state.llmModelId || "gpt-4o-mini").trim() || "gpt-4o-mini";
+  const rawRef = String(state.llmModelRef || "").trim();
+  if (!rawRef) return { provider: providerHint, modelId: modelHint };
+
+  const slash = rawRef.indexOf("/");
+  if (slash > 0) {
+    const provider = rawRef.slice(0, slash).trim();
+    const modelId = rawRef.slice(slash + 1).trim();
+    if (provider && modelId) return { provider, modelId };
+  }
+  return { provider: providerHint, modelId: rawRef };
+}
+
+function resolveLlmBaseUrl({ provider, templateBaseUrl }) {
+  const explicitBase = String(state.llmBaseUrl || "").trim();
+  const useProxy = state.llmUseProxy !== false;
+  const baseRaw = explicitBase || String(templateBaseUrl || "").trim() || defaultLlmBaseUrl();
+
+  const origin = safeOrigin();
+  const resolved = new URL(baseRaw, origin || "http://localhost");
+  if (useProxy) {
+    const isOpenAiDefaultPath = provider === "openai" && !explicitBase;
+    if (isOpenAiDefaultPath) {
+      return defaultLlmBaseUrl();
+    }
+    if (origin && resolved.origin === origin) return resolved.toString();
+    return llmProxyBaseUrl(resolved.toString());
+  }
+
+  const access = evaluateOriginAccess({
+    url: resolved.toString(),
+    capability: "llm",
+    method: "POST",
+    consume: false,
+  });
+  if (!access.allowed) {
+    log(`llm base blocked by allowlist (fallback to same-origin): ${resolved.toString()}`);
+    return defaultLlmBaseUrl();
+  }
+  return resolved.toString();
+}
+
 function getConfiguredModel() {
-  const api = state.llmApi || "openai-completions";
-  const provider = state.llmProvider || "openai";
-  const id = state.llmModelId || "gpt-4o-mini";
-  const baseUrl = state.llmBaseUrl || defaultLlmBaseUrl();
-  assertAllowlistedUrl(baseUrl);
+  const parsed = parseConfiguredModelRef();
+  const provider = String(parsed.provider || "openai").trim() || "openai";
+  const modelId = String(parsed.modelId || "gpt-4o-mini").trim() || "gpt-4o-mini";
+
+  let template = null;
+  try {
+    template = getPiModel(provider, modelId) || null;
+  } catch {
+    template = null;
+  }
+
+  const api = String(state.llmApi || template?.api || "openai-completions").trim() || "openai-completions";
+  const baseUrl = resolveLlmBaseUrl({ provider, templateBaseUrl: template?.baseUrl || "" });
+
+  if (template) {
+    return {
+      ...template,
+      id: modelId,
+      name: template.name || modelId,
+      api,
+      provider,
+      baseUrl,
+      headers: { ...(template.headers || {}) },
+    };
+  }
 
   /** @type {import("@mariozechner/pi-ai").Model<any>} */
   return {
-    id,
-    name: id,
+    id: modelId,
+    name: modelId,
     api,
     provider,
     baseUrl,
@@ -1192,6 +1262,18 @@ function getConfiguredModel() {
     contextWindow: 128_000,
     maxTokens: 4096,
   };
+}
+
+function isCodexCliSentinelEligible(model) {
+  if (!state.codexCliEnabled) return false;
+  if (!model || model.provider !== "openai" || model.api !== "openai-completions") return false;
+  try {
+    const origin = safeOrigin();
+    const u = new URL(String(model.baseUrl || ""), origin || "http://localhost");
+    return !!origin && u.origin === origin && u.pathname.startsWith("/api/llm/openai/v1");
+  } catch {
+    return false;
+  }
 }
 
 function makeAssistant(text, { stopReason = "stop", errorMessage = null } = {}) {
@@ -1633,9 +1715,11 @@ async function runAgentTurn(userText) {
     timestamp: nowMs(),
   };
 
-  // PI-AI expects a non-empty `apiKey` string for OpenAI-style providers.
-  // In Codex-CLI bridge mode, the server ignores the Authorization header, so we can use a sentinel.
-  const apiKey = state.llmApiKey || (state.codexCliEnabled ? "codex-cli" : "");
+  const model = getConfiguredModel();
+  // PI-AI expects a non-empty `apiKey` string for provider calls.
+  // In Codex-CLI bridge mode, the server ignores Authorization for chat.completions on
+  // /api/llm/openai/v1, so we can use a sentinel in that specific configuration.
+  const apiKey = state.llmApiKey || (isCodexCliSentinelEligible(model) ? "codex-cli" : "");
   if (!apiKey) {
     const m = makeAssistant("LLM not configured. Set your API key in the Gateway panel.", { stopReason: "error" });
     state.transcript.push(prompt);
@@ -1653,7 +1737,7 @@ async function runAgentTurn(userText) {
   };
 
   const config = {
-    model: getConfiguredModel(),
+    model,
     apiKey,
     reasoning: undefined,
     convertToLlm: (messages) => messages.filter((m) => m && (m.role === "user" || m.role === "assistant" || m.role === "toolResult")),
@@ -2717,8 +2801,10 @@ const state = {
   codexCliEnabled: false,
   llmApi: null,
   llmProvider: null,
+  llmModelRef: null,
   llmModelId: null,
   llmBaseUrl: null,
+  llmUseProxy: true,
   llmApiKey: null,
   secretStore: {},
   originGrants: [],
@@ -2736,8 +2822,11 @@ async function loadStateFromIdb() {
 
   state.llmApi = (await metaGet("llmApi")) || null;
   state.llmProvider = (await metaGet("llmProvider")) || null;
+  state.llmModelRef = (await metaGet("llmModelRef")) || null;
   state.llmModelId = (await metaGet("llmModelId")) || null;
   state.llmBaseUrl = (await metaGet("llmBaseUrl")) || null;
+  const llmUseProxyStored = await metaGet("llmUseProxy");
+  state.llmUseProxy = llmUseProxyStored === false ? false : true;
   state.llmApiKey = (await metaGet("llmApiKey")) || null;
   const secretStoreRaw = (await metaGet("secretStoreV1")) || {};
   state.secretStore = {};
@@ -2902,22 +2991,32 @@ self.addEventListener("message", async (ev) => {
       const apiKey = typeof msg.apiKey === "string" ? msg.apiKey.trim() : "";
       const api = typeof msg.api === "string" ? msg.api.trim() : "";
       const provider = typeof msg.provider === "string" ? msg.provider.trim() : "";
+      const modelRef = typeof msg.modelRef === "string" ? msg.modelRef.trim() : "";
       const modelId = typeof msg.modelId === "string" ? msg.modelId.trim() : "";
       const baseUrl = typeof msg.baseUrl === "string" ? msg.baseUrl.trim() : "";
+      const useProxy = msg.useProxy !== false;
 
       state.llmApiKey = apiKey || null;
       state.llmApi = api || null;
       state.llmProvider = provider || null;
+      state.llmModelRef = modelRef || null;
       state.llmModelId = modelId || null;
       state.llmBaseUrl = baseUrl || null;
+      state.llmUseProxy = useProxy;
 
       await metaSet("llmApiKey", state.llmApiKey);
       await metaSet("llmApi", state.llmApi);
       await metaSet("llmProvider", state.llmProvider);
+      await metaSet("llmModelRef", state.llmModelRef);
       await metaSet("llmModelId", state.llmModelId);
       await metaSet("llmBaseUrl", state.llmBaseUrl);
+      await metaSet("llmUseProxy", state.llmUseProxy);
 
-      log(`llm configured api=${state.llmApi || "default"} provider=${state.llmProvider || "default"} model=${state.llmModelId || "default"}`);
+      log(
+        `llm configured api=${state.llmApi || "default"} provider=${state.llmProvider || "default"} model=${
+          state.llmModelRef || state.llmModelId || "default"
+        } proxy=${state.llmUseProxy ? "1" : "0"}`,
+      );
       return;
     }
 
