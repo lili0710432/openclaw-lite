@@ -4,11 +4,15 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 function readCodexAccessToken() {
-  const p = path.join(os.homedir(), ".codex", "auth.json");
-  const raw = fs.readFileSync(p, "utf8");
-  const json = JSON.parse(raw);
-  const tok = json?.tokens?.access_token;
-  return typeof tok === "string" && tok.trim() ? tok.trim() : null;
+  try {
+    const p = path.join(os.homedir(), ".codex", "auth.json");
+    const raw = fs.readFileSync(p, "utf8");
+    const json = JSON.parse(raw);
+    const tok = json?.tokens?.access_token;
+    return typeof tok === "string" && tok.trim() ? tok.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 function isLocalRequest(req) {
@@ -35,7 +39,16 @@ function proxyViaCodexCli(req, res) {
     return res.status(400).json({ ok: false, error: "MISSING_CODEX_CLI_SESSION" });
   }
 
-  const rawBody = clampBody(req.rawBody || req.body);
+  let rawBody = "";
+  try {
+    rawBody = clampBody(req.rawBody || req.body);
+  } catch (err) {
+    const msg = err && typeof err.message === "string" ? err.message : "";
+    if (msg === "BODY_TOO_LARGE") {
+      return res.status(413).json({ ok: false, error: "BODY_TOO_LARGE" });
+    }
+    return res.status(400).json({ ok: false, error: "INVALID_BODY" });
+  }
 
   const child = spawn(
     "codex",
@@ -61,6 +74,30 @@ function proxyViaCodexCli(req, res) {
     },
   );
 
+  let responded = false;
+  function respondJson(status, body) {
+    if (responded) return;
+    responded = true;
+    res.status(status).json(body);
+  }
+
+  function respondSse(lines) {
+    if (responded) return;
+    responded = true;
+    res.status(200);
+    res.setHeader("content-type", "text/event-stream; charset=utf-8");
+    res.setHeader("cache-control", "no-cache");
+    res.setHeader("connection", "keep-alive");
+    res.flushHeaders?.();
+    for (const line of lines) res.write(line);
+    res.end();
+  }
+
+  child.on("error", (err) => {
+    const code = typeof err?.code === "string" ? err.code : null;
+    respondJson(502, { ok: false, error: "CODEX_CLI_SPAWN_FAILED", code });
+  });
+
   let stderr = "";
   child.stderr.on("data", (d) => {
     stderr += d.toString("utf8");
@@ -68,8 +105,14 @@ function proxyViaCodexCli(req, res) {
 
   // Parse the incoming OpenAI-style body to extract the user prompt.
   let prompt = "";
+  let wantsStream = false;
+  let model = "codex-cli";
   try {
     const body = JSON.parse(rawBody);
+    wantsStream = body?.stream === true;
+    if (typeof body?.model === "string" && body.model.trim()) {
+      model = body.model.trim();
+    }
     const messages = Array.isArray(body?.messages) ? body.messages : [];
     const firstUser = messages.find((m) => m && m.role === "user");
     const content = firstUser?.content;
@@ -89,8 +132,9 @@ function proxyViaCodexCli(req, res) {
   });
 
   child.on("close", (code) => {
+    if (responded) return;
     if (code !== 0) {
-      return res.status(502).json({ ok: false, error: "CODEX_CLI_FAILED", code, stderr: stderr.slice(-4000) });
+      return respondJson(502, { ok: false, error: "CODEX_CLI_FAILED", code, stderr: stderr.slice(-4000) });
     }
 
     // Find the final agent_message text.
@@ -108,12 +152,37 @@ function proxyViaCodexCli(req, res) {
       }
     }
 
+    const id = `chatcmpl_codexcli_${Date.now()}`;
+    const created = Math.floor(Date.now() / 1000);
+
+    if (wantsStream) {
+      const chunk1 = {
+        id,
+        object: "chat.completion.chunk",
+        created,
+        model,
+        choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }],
+      };
+      const chunk2 = {
+        id,
+        object: "chat.completion.chunk",
+        created,
+        model,
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      };
+      return respondSse([
+        `data: ${JSON.stringify(chunk1)}\n\n`,
+        `data: ${JSON.stringify(chunk2)}\n\n`,
+        "data: [DONE]\n\n",
+      ]);
+    }
+
     // Return an OpenAI-compatible non-streaming chat.completions response.
-    return res.json({
-      id: `chatcmpl_codexcli_${Date.now()}`,
+    return respondJson(200, {
+      id,
       object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model: "codex-cli",
+      created,
+      model,
       choices: [
         {
           index: 0,

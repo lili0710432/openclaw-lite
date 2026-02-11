@@ -131,11 +131,14 @@ function readStore() {
   return store;
 }
 
-function writeStore(next) {
+function writeStore(next, opts = {}) {
   ensureDb();
   const cleaned = normalizeStore(next);
+  const tables =
+    opts && Array.isArray(opts.tables) && opts.tables.length > 0 ? opts.tables : TABLES;
   withTransaction(db, () => {
-    for (const table of TABLES) {
+    for (const table of tables) {
+      if (!TABLES.includes(table)) continue;
       statements[table].clear.run();
       const rows = cleaned[table];
       for (let i = 0; i < rows.length; i += 1) {

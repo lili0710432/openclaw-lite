@@ -40,6 +40,48 @@ async function solanaSignMessageBytes(messageStr) {
   return sig;
 }
 
+async function evmConnect() {
+  const eth = window.ethereum;
+  if (eth && typeof eth.request === "function") {
+    const accounts = await eth.request({ method: "eth_requestAccounts" });
+    const address = Array.isArray(accounts) && accounts.length > 0 ? String(accounts[0] || "").trim() : "";
+    if (!address) throw new Error("EVM_CONNECT_FAILED");
+    return address;
+  }
+
+  // Deterministic test fallback.
+  const res = await fetch("/__test__/evm/wallet", { credentials: "include" });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok || typeof data.address !== "string") {
+    throw new Error(String(data?.error || "NO_EVM_WALLET"));
+  }
+  return data.address;
+}
+
+async function evmSignMessageHex(messageStr, address) {
+  const eth = window.ethereum;
+  if (eth && typeof eth.request === "function") {
+    const addr = String(address || "").trim() || (await evmConnect());
+    const sig = await eth.request({ method: "personal_sign", params: [messageStr, addr] });
+    const signatureHex = typeof sig === "string" ? sig.trim() : "";
+    if (!signatureHex) throw new Error("EVM_SIGN_FAILED");
+    return { address: addr, signatureHex };
+  }
+
+  // Deterministic test fallback.
+  const res = await fetch("/__test__/evm/sign", {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ message: String(messageStr || "") }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok || typeof data.signatureHex !== "string" || typeof data.address !== "string") {
+    throw new Error(String(data?.error || "EVM_SIGN_FAILED"));
+  }
+  return { address: data.address, signatureHex: data.signatureHex };
+}
+
 async function init() {
   const runtimeStatus = byId("runtimeStatus");
   const walletLine = byId("walletLine");
@@ -47,6 +89,7 @@ async function init() {
   const vaultStatus = byId("vaultStatus");
   const approvals = byId("approvals");
   const runtimeLogs = byId("runtimeLogs");
+  const workspaceEvents = byId("workspaceEvents");
   const chatTranscript = byId("chatTranscript");
   const chatInput = byId("chatInput");
   const llmKeyInput = byId("llmKeyInput");
@@ -72,6 +115,23 @@ async function init() {
   }
 
   let walletAddr = null;
+  let walletAddrEvm = null;
+
+  function renderWorkspaceEvents(events) {
+    if (!workspaceEvents) return;
+    const rows = Array.isArray(events) ? events : [];
+    const lines = rows
+      .slice(0, 50)
+      .map((e) => {
+        const ts = typeof e?.timestamp === "string" ? e.timestamp : "";
+        const actor = typeof e?.actor === "string" ? e.actor : "unknown";
+        const action = typeof e?.action === "string" ? e.action : "update";
+        const path = typeof e?.path === "string" ? e.path : "";
+        return `${ts} ${actor} ${action} ${path}`.trim();
+      })
+      .filter(Boolean);
+    workspaceEvents.textContent = lines.join("\n");
+  }
 
   async function connectWallet({ silent = false } = {}) {
     try {
@@ -100,6 +160,64 @@ async function init() {
   function sendToWorker(msg) {
     worker.postMessage(msg);
   }
+
+  const testRequests = new Map();
+  let testReqCounter = 0;
+
+  function nextTestRequestId(prefix = "t") {
+    testReqCounter += 1;
+    return `${prefix}_${Date.now()}_${testReqCounter}`;
+  }
+
+  function sendWorkerRequest({ requestType, responseType, payload, timeoutMs = 10_000 }) {
+    const requestId = nextTestRequestId("req");
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        testRequests.delete(requestId);
+        reject(new Error("WORKER_REQUEST_TIMEOUT"));
+      }, timeoutMs);
+      testRequests.set(requestId, { resolve, reject, timeoutId, responseType });
+      sendToWorker({ type: requestType, requestId, ...(payload || {}) });
+    });
+  }
+
+  function resolveWorkerRequest(msg) {
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : "";
+    if (!requestId) return false;
+    const rec = testRequests.get(requestId);
+    if (!rec) return false;
+    if (typeof rec.responseType === "string" && rec.responseType !== msg.type) return false;
+    clearTimeout(rec.timeoutId);
+    testRequests.delete(requestId);
+    rec.resolve(msg);
+    return true;
+  }
+
+  function setCodexCliMode(enabled) {
+    const on = enabled === true;
+    sendToWorker({ type: "gateway.command.setRuntimeCaps", codexCli: on });
+
+    if (llmKeyInput) {
+      llmKeyInput.disabled = on;
+      llmKeyInput.placeholder = on ? "Codex CLI bridge enabled (no API key required)" : "LLM API key (stored locally)";
+      if (on) llmKeyInput.value = "";
+    }
+    if (llmSaveBtn) llmSaveBtn.disabled = on;
+    if (llmLine) llmLine.textContent = on ? "LLM: Codex CLI bridge (local)" : llmLine.textContent;
+  }
+
+  async function loadCapabilities() {
+    try {
+      const res = await fetch("/api/runtime/capabilities", { credentials: "include" });
+      const data = await res.json().catch(() => null);
+      setCodexCliMode(!!data?.llm?.codexCli);
+    } catch {
+      // Older servers won't have this endpoint; default to requiring a real API key.
+      setCodexCliMode(false);
+    }
+  }
+
+  loadCapabilities();
 
   function configureLlm({ apiKey }) {
     const key = String(apiKey || "").trim();
@@ -175,6 +293,10 @@ async function init() {
     const msg = ev.data;
     if (!msg || typeof msg.type !== "string") return;
 
+    if (resolveWorkerRequest(msg)) {
+      return;
+    }
+
     if (msg.type === "worker.runtime.status") {
       if (runtimeStatus) runtimeStatus.textContent = String(msg.status || "");
       return;
@@ -194,6 +316,12 @@ async function init() {
 
     if (msg.type === "worker.log.append") {
       appendLine(runtimeLogs, String(msg.line || ""));
+      return;
+    }
+
+    if (msg.type === "worker.workspace.events") {
+      const events = Array.isArray(msg.events) ? msg.events : [];
+      renderWorkspaceEvents(events);
       return;
     }
 
@@ -253,25 +381,46 @@ async function init() {
     if (msg.type === "worker.wallet.request") {
       const id = String(msg.id || "");
       const method = String(msg.method || "");
+      const chain = String(msg.chain || "solana").toLowerCase();
       try {
         if (method === "connect") {
-          const addr = await connectWallet();
+          const addr = chain === "evm" ? await evmConnect() : await connectWallet();
+          if (chain === "evm") {
+            walletAddrEvm = addr;
+          } else {
+            walletAddr = addr;
+          }
           sendToWorker({ type: "gateway.wallet.response", id, ok: true, address: addr });
           return;
         }
         if (method === "signMessage") {
-          if (!walletAddr) {
-            await connectWallet({ silent: true });
-          }
           const message = String(msg.message || "");
-          const sigBytes = await solanaSignMessageBytes(message);
-          sendToWorker({
-            type: "gateway.wallet.response",
-            id,
-            ok: true,
-            address: walletAddr,
-            signatureB64: bytesToB64(sigBytes),
-          });
+          if (chain === "evm") {
+            if (!walletAddrEvm) {
+              walletAddrEvm = await evmConnect();
+            }
+            const signed = await evmSignMessageHex(message, walletAddrEvm);
+            walletAddrEvm = signed.address;
+            sendToWorker({
+              type: "gateway.wallet.response",
+              id,
+              ok: true,
+              address: signed.address,
+              signatureHex: signed.signatureHex,
+            });
+          } else {
+            if (!walletAddr) {
+              await connectWallet({ silent: true });
+            }
+            const sigBytes = await solanaSignMessageBytes(message);
+            sendToWorker({
+              type: "gateway.wallet.response",
+              id,
+              ok: true,
+              address: walletAddr,
+              signatureB64: bytesToB64(sigBytes),
+            });
+          }
           return;
         }
         throw new Error("UNSUPPORTED_WALLET_METHOD");
@@ -325,6 +474,295 @@ async function init() {
       });
       db.close();
       return Number(count) || 0;
+    },
+    async getToolRegistryInfo() {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.registry",
+        responseType: "worker.tools.registry",
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "TOOLS_REGISTRY_FAILED"));
+      return res.info || null;
+    },
+    async runToolSmoke({ count = 5 } = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.smoke",
+        responseType: "worker.tools.smoke",
+        payload: { count },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "TOOLS_SMOKE_FAILED"));
+      return res.summary || null;
+    },
+    async getTranscriptToolStats() {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.transcriptStats",
+        responseType: "worker.tools.transcriptStats",
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "TOOLS_TRANSCRIPT_STATS_FAILED"));
+      return res.stats || null;
+    },
+    async webFetch(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.webFetch",
+        responseType: "worker.tools.webFetch",
+        payload: { toolName: "web_fetch", params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WEB_FETCH_FAILED"));
+      return res.result || null;
+    },
+    async skillFetch(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.webFetch",
+        responseType: "worker.tools.webFetch",
+        payload: { toolName: "skill_fetch", params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "SKILL_FETCH_FAILED"));
+      return res.result || null;
+    },
+    async httpRequest(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.httpRequest",
+        responseType: "worker.tools.httpRequest",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "HTTP_REQUEST_FAILED"));
+      return res.result || null;
+    },
+    async setSecret({ name, value } = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.secrets.set",
+        responseType: "worker.secrets.set",
+        payload: { params: { name, value } },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "SECRET_SET_FAILED"));
+      return res.result || null;
+    },
+    async listSecrets() {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.secrets.list",
+        responseType: "worker.secrets.list",
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "SECRET_LIST_FAILED"));
+      return res.result || null;
+    },
+    async deleteSecret({ name } = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.secrets.delete",
+        responseType: "worker.secrets.delete",
+        payload: { params: { name } },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "SECRET_DELETE_FAILED"));
+      return res.result || null;
+    },
+    async getTranscriptDump() {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.transcriptDump",
+        responseType: "worker.tools.transcriptDump",
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "TRANSCRIPT_DUMP_FAILED"));
+      return typeof res.dump === "string" ? res.dump : "";
+    },
+    async wsOpen(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.ws.open",
+        responseType: "worker.tools.ws.open",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WS_OPEN_FAILED"));
+      return res.result || null;
+    },
+    async wsSend(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.ws.send",
+        responseType: "worker.tools.ws.send",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WS_SEND_FAILED"));
+      return res.result || null;
+    },
+    async wsRecv(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.ws.recv",
+        responseType: "worker.tools.ws.recv",
+        payload: { params },
+        timeoutMs: Math.max(15_000, Number(params?.waitMs || 0) + 5_000),
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WS_RECV_FAILED"));
+      return res.result || null;
+    },
+    async wsClose(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.ws.close",
+        responseType: "worker.tools.ws.close",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WS_CLOSE_FAILED"));
+      return res.result || null;
+    },
+    async wsStatus(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.ws.status",
+        responseType: "worker.tools.ws.status",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WS_STATUS_FAILED"));
+      return res.result || null;
+    },
+    async workspaceMkdir(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.workspace.mkdir",
+        responseType: "worker.workspace.mkdir",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WORKSPACE_MKDIR_FAILED"));
+      return res.result || null;
+    },
+    async workspaceList(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.workspace.list",
+        responseType: "worker.workspace.list",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WORKSPACE_LIST_FAILED"));
+      return res.result || null;
+    },
+    async workspaceReadFile(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.workspace.readFile",
+        responseType: "worker.workspace.readFile",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WORKSPACE_READ_FAILED"));
+      return res.result || null;
+    },
+    async workspaceWriteFile(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.workspace.writeFile",
+        responseType: "worker.workspace.writeFile",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WORKSPACE_WRITE_FAILED"));
+      return res.result || null;
+    },
+    async workspaceEditFile(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.workspace.editFile",
+        responseType: "worker.workspace.editFile",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WORKSPACE_EDIT_FAILED"));
+      return res.result || null;
+    },
+    async workspaceDelete(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.workspace.delete",
+        responseType: "worker.workspace.delete",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WORKSPACE_DELETE_FAILED"));
+      return res.result || null;
+    },
+    async workspaceBootstrap() {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.workspace.bootstrap",
+        responseType: "worker.workspace.bootstrap",
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WORKSPACE_BOOTSTRAP_FAILED"));
+      return res.result || null;
+    },
+    async workspaceEvents() {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.workspace.events",
+        responseType: "worker.workspace.events",
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WORKSPACE_EVENTS_FAILED"));
+      return res.result || null;
+    },
+    async walletConnectTool(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.wallet.connect",
+        responseType: "worker.tools.wallet.connect",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WALLET_CONNECT_TOOL_FAILED"));
+      return res.result || null;
+    },
+    async walletGetAccountsTool(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.wallet.accounts",
+        responseType: "worker.tools.wallet.accounts",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WALLET_ACCOUNTS_TOOL_FAILED"));
+      return res.result || null;
+    },
+    async walletSignMessageTool(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.tools.wallet.signMessage",
+        responseType: "worker.tools.wallet.signMessage",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WALLET_SIGN_TOOL_FAILED"));
+      return res.result || null;
+    },
+    async runtimeKeyMaterialStatus() {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.runtime.keyMaterialStatus",
+        responseType: "worker.runtime.keyMaterialStatus",
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "RUNTIME_KEY_STATUS_FAILED"));
+      return res.result || null;
+    },
+    async webmcpDiscover(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.webmcp.discover",
+        responseType: "worker.webmcp.discover",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WEBMCP_DISCOVER_FAILED"));
+      return res.result || null;
+    },
+    async webmcpCall(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.webmcp.call",
+        responseType: "worker.webmcp.call",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "WEBMCP_CALL_FAILED"));
+      return res.result || null;
+    },
+    async experienceRun(params = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.experience.run",
+        responseType: "worker.experience.run",
+        payload: { params },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "EXPERIENCE_RUN_FAILED"));
+      return res.result || null;
+    },
+    async checkOriginAccess({ url, capability = "web_fetch", method = "GET", consume = true } = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.origin.check",
+        responseType: "worker.origin.check",
+        payload: { url, capability, method, consume },
+      });
+      if (!res?.ok) throw new Error(String(res?.error || "ORIGIN_CHECK_FAILED"));
+      return res.result || null;
+    },
+    async requestOriginGrant({ url, capability = "web_fetch", scope = "once", methods = null } = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.origin.grant",
+        responseType: "worker.origin.grant",
+        payload: { url, capability, scope, methods },
+      });
+      return res || null;
+    },
+    async revokeOriginGrant({ grantId } = {}) {
+      const res = await sendWorkerRequest({
+        requestType: "gateway.command.origin.revoke",
+        responseType: "worker.origin.revoke",
+        payload: { grantId },
+      });
+      return res || null;
     },
   };
 }

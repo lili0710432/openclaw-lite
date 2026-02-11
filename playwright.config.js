@@ -51,6 +51,7 @@ module.exports = defineConfig({
       TEST_RESET_TOKEN: 'test-reset',
       // Deterministic Ed25519 seed used by /__test__/wallet/seed and token-gating shortcuts.
       TEST_WALLET_SEED_HEX: '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+      TEST_EVM_PRIVATE_KEY: '0x59c6995e998f97a5a0044966f0945381d1d0e6f94f7f8f6fe1d9a8f8a9f2f9d3',
       // Avoid modifying tracked data/store.json during e2e runs.
       STORE_PATH: require('path').join(process.cwd(), 'data', 'store.e2e.sqlite')
     }
