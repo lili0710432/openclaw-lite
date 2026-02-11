@@ -96,6 +96,7 @@ async function init() {
   const llmModelRefInput = byId("llmModelRefInput");
   const llmApiInput = byId("llmApiInput");
   const llmBaseUrlInput = byId("llmBaseUrlInput");
+  const llmThinkingInput = byId("llmThinkingInput");
   const llmUseProxyInput = byId("llmUseProxyInput");
   const llmLine = byId("llmLine");
 
@@ -209,6 +210,7 @@ async function init() {
     if (llmModelRefInput) llmModelRefInput.disabled = on;
     if (llmApiInput) llmApiInput.disabled = on;
     if (llmBaseUrlInput) llmBaseUrlInput.disabled = on;
+    if (llmThinkingInput) llmThinkingInput.disabled = on;
     if (llmUseProxyInput) llmUseProxyInput.disabled = on;
     if (llmSaveBtn) llmSaveBtn.disabled = on;
     if (llmLine) llmLine.textContent = on ? "LLM: Codex CLI bridge (local)" : llmLine.textContent;
@@ -239,11 +241,19 @@ async function init() {
     return { provider: fallbackProvider, modelId: ref, modelRef: `${fallbackProvider}/${ref}` };
   }
 
+  function normalizeThinkingLevel(value) {
+    const v = String(value || "").trim().toLowerCase();
+    if (!v) return "";
+    if (v === "minimal" || v === "low" || v === "medium" || v === "high" || v === "xhigh") return v;
+    return "";
+  }
+
   function configureLlm({ apiKey }) {
     const key = String(apiKey || "").trim();
     const modelParsed = parseModelRef(llmModelRefInput?.value || "");
     let api = String(llmApiInput?.value || "").trim();
     const baseOverride = String(llmBaseUrlInput?.value || "").trim();
+    const thinking = normalizeThinkingLevel(llmThinkingInput?.value || "");
     const useProxy = llmUseProxyInput ? llmUseProxyInput.checked !== false : true;
     const defaultOpenAiProxyBase = new URL("/api/llm/openai/v1", window.location.origin).toString();
     if (!api && modelParsed.provider === "openai") api = "openai-completions";
@@ -257,11 +267,14 @@ async function init() {
       modelRef: modelParsed.modelRef,
       modelId: modelParsed.modelId,
       baseUrl,
+      reasoning: thinking,
       useProxy,
     });
     if (llmLine) {
       const keyStatus = key ? "key saved" : "missing key";
-      llmLine.textContent = `LLM: ${modelParsed.modelRef} (${keyStatus}, proxy=${useProxy ? "on" : "off"})`;
+      llmLine.textContent = `LLM: ${modelParsed.modelRef} (${keyStatus}, proxy=${
+        useProxy ? "on" : "off"
+      }, thinking=${thinking || "default"})`;
     }
   }
 

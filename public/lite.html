@@ -51,6 +51,14 @@
         </div>
         <div class="kv" style="margin-top: 8px; flex-wrap: wrap;">
           <input id="llmBaseUrlInput" class="input" placeholder="provider base URL override (optional)" style="min-width: 320px; flex: 1;" />
+          <select id="llmThinkingInput" class="input" style="min-width: 220px;">
+            <option value="">Thinking level (default)</option>
+            <option value="minimal">Thinking: minimal</option>
+            <option value="low">Thinking: low</option>
+            <option value="medium">Thinking: medium</option>
+            <option value="high">Thinking: high</option>
+            <option value="xhigh">Thinking: xhigh</option>
+          </select>
           <label class="small" style="display:flex; align-items:center; gap:6px;">
             <input id="llmUseProxyInput" type="checkbox" checked />
             Use same-origin LLM proxy

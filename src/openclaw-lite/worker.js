@@ -1264,6 +1264,15 @@ function getConfiguredModel() {
   };
 }
 
+function normalizeReasoningLevel(value) {
+  const v = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!v || v === "off" || v === "default") return null;
+  if (v === "minimal" || v === "low" || v === "medium" || v === "high" || v === "xhigh") return v;
+  return null;
+}
+
 function isCodexCliSentinelEligible(model) {
   if (!state.codexCliEnabled) return false;
   if (!model || model.provider !== "openai" || model.api !== "openai-completions") return false;
@@ -1739,7 +1748,7 @@ async function runAgentTurn(userText) {
   const config = {
     model,
     apiKey,
-    reasoning: undefined,
+    reasoning: state.llmReasoning || undefined,
     convertToLlm: (messages) => messages.filter((m) => m && (m.role === "user" || m.role === "assistant" || m.role === "toolResult")),
   };
 
@@ -2804,6 +2813,7 @@ const state = {
   llmModelRef: null,
   llmModelId: null,
   llmBaseUrl: null,
+  llmReasoning: null,
   llmUseProxy: true,
   llmApiKey: null,
   secretStore: {},
@@ -2825,6 +2835,7 @@ async function loadStateFromIdb() {
   state.llmModelRef = (await metaGet("llmModelRef")) || null;
   state.llmModelId = (await metaGet("llmModelId")) || null;
   state.llmBaseUrl = (await metaGet("llmBaseUrl")) || null;
+  state.llmReasoning = normalizeReasoningLevel(await metaGet("llmReasoning"));
   const llmUseProxyStored = await metaGet("llmUseProxy");
   state.llmUseProxy = llmUseProxyStored === false ? false : true;
   state.llmApiKey = (await metaGet("llmApiKey")) || null;
@@ -2994,6 +3005,7 @@ self.addEventListener("message", async (ev) => {
       const modelRef = typeof msg.modelRef === "string" ? msg.modelRef.trim() : "";
       const modelId = typeof msg.modelId === "string" ? msg.modelId.trim() : "";
       const baseUrl = typeof msg.baseUrl === "string" ? msg.baseUrl.trim() : "";
+      const reasoning = normalizeReasoningLevel(msg.reasoning);
       const useProxy = msg.useProxy !== false;
 
       state.llmApiKey = apiKey || null;
@@ -3002,6 +3014,7 @@ self.addEventListener("message", async (ev) => {
       state.llmModelRef = modelRef || null;
       state.llmModelId = modelId || null;
       state.llmBaseUrl = baseUrl || null;
+      state.llmReasoning = reasoning;
       state.llmUseProxy = useProxy;
 
       await metaSet("llmApiKey", state.llmApiKey);
@@ -3010,12 +3023,13 @@ self.addEventListener("message", async (ev) => {
       await metaSet("llmModelRef", state.llmModelRef);
       await metaSet("llmModelId", state.llmModelId);
       await metaSet("llmBaseUrl", state.llmBaseUrl);
+      await metaSet("llmReasoning", state.llmReasoning);
       await metaSet("llmUseProxy", state.llmUseProxy);
 
       log(
         `llm configured api=${state.llmApi || "default"} provider=${state.llmProvider || "default"} model=${
           state.llmModelRef || state.llmModelId || "default"
-        } proxy=${state.llmUseProxy ? "1" : "0"}`,
+        } proxy=${state.llmUseProxy ? "1" : "0"} thinking=${state.llmReasoning || "default"}`,
       );
       return;
     }
