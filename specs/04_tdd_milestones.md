@@ -93,6 +93,23 @@ Done when:
 Test:
 - `e2e/openclaw_lite/09_pi_ai_llm_integration.spec.js`
 
+## M9+ — Tools + Experience Engine Track
+
+Tooling and experience-engine milestones are defined in:
+- `specs/09_tools_and_experience_engine_spec_v1_0.md`
+
+This extends milestones with a granular M9-M23 sequence covering:
+- origin grants + approval scopes
+- `web_fetch` (`skill_fetch` alias), optional `curl_parse`, and `http_request` (curl pendant)
+- websocket tools
+- workspace file tools + core OpenClaw workspace primitive + workspace visibility UI
+- Solana + EVM wallet tools
+- reference skill conformance for:
+  - `https://agenttown.app/skill.md`
+  - `https://www.moltbook.com/skill.md`
+  - `http://localhost:4173/skill_agent_solo.md`
+- forward-looking WebMCP + experience engine baseline
+
 ## Global Gates (Always-On)
 
 These tests protect “hard requirements”:
@@ -100,3 +117,15 @@ These tests protect “hard requirements”:
 - PI version alignment + pi-mono requirement: `e2e/14_openclaw_lite_pi_versions.spec.js`
 - No in-runtime mocks: `e2e/15_openclaw_lite_no_mocks.spec.js`
 
+## M24+ — Backend Modularization Track
+
+Server modularization milestones for concentration-risk remediation are defined in:
+- `specs/10_backend_modularization_tdd_spec_v1_0.md`
+
+This track is TDD-first and adds incremental structure gates for:
+- bootstrap/app factory split
+- session module extraction
+- tools router extraction
+- LLM router extraction
+- house/wallet router extraction
+- test-only fixture isolation and final backend module budgets

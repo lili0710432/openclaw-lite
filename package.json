@@ -14,13 +14,15 @@
     "test:ui": "playwright test --ui"
   },
   "dependencies": {
-    "@noble/ed25519": "^3.0.0",
     "@mariozechner/pi-agent-core": "0.52.6",
     "@mariozechner/pi-ai": "0.52.6",
     "@mariozechner/pi-coding-agent": "0.52.6",
     "@mariozechner/pi-tui": "0.52.6",
+    "@noble/ed25519": "^3.0.0",
+    "ethers": "^6.16.0",
     "express": "^4.19.2",
-    "fflate": "^0.8.2"
+    "fflate": "^0.8.2",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

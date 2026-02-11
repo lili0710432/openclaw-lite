@@ -58,7 +58,7 @@ OpenClaw Lite is a browser-native agent runtime (Web Worker / PWA) that:
 - integrates with an always-present website Gateway Panel.
 
 OpenClaw Lite v1.2 is **not** full OpenClaw parity:
-- no OS-level tools/skills in v1.2 (browser-only tool surface)
+- no host OS tools in v1.2: the runtime MUST NOT execute host shell commands or read/write arbitrary host filesystem paths. Tooling MUST be browser-scoped only (Web APIs, IndexedDB/OPFS, and explicitly user-granted file handles).
 - no background daemon expectations beyond Worker/PWA constraints
 
 ---
