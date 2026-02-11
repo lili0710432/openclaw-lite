@@ -116,3 +116,16 @@ These tests protect “hard requirements”:
 - OpenClaw export compatibility: `e2e/13_openclaw_compat_validator.spec.js`
 - PI version alignment + pi-mono requirement: `e2e/14_openclaw_lite_pi_versions.spec.js`
 - No in-runtime mocks: `e2e/15_openclaw_lite_no_mocks.spec.js`
+
+## M24+ — Backend Modularization Track
+
+Server modularization milestones for concentration-risk remediation are defined in:
+- `specs/10_backend_modularization_tdd_spec_v1_0.md`
+
+This track is TDD-first and adds incremental structure gates for:
+- bootstrap/app factory split
+- session module extraction
+- tools router extraction
+- LLM router extraction
+- house/wallet router extraction
+- test-only fixture isolation and final backend module budgets
