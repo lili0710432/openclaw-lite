@@ -19,9 +19,9 @@ cd openclaw-lite
 
 git submodule update --init --recursive
 
-npm install
-npm test
-npm run dev
+npm install    ->  pnpm  install
+npm test       ->  pnpm  test
+npm run dev    ->  pnpm  dev -host 0.0.0.0
 ```
 
 Open:
