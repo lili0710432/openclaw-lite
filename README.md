@@ -24,6 +24,11 @@ npm test       ->  pnpm  test
 npm run dev    ->  pnpm  dev -host 0.0.0.0
 ```
 
+ 如果沒有pnpm指令，先用 npm 安裝 pnpm 工具 `npm install -g pnpm`,  如果安裝pnpm失敗，需要先配置下 `npm config set strict-ssl false`**
+ 如果系統阻止pnpm 構建腳本指令， 先執行 pnpm approve-builds。
+ 
+ 
+ **
 Open:
 - Gateway Panel: `http://localhost:4173/lite`
 - Town grid: `http://localhost:4173/town`
